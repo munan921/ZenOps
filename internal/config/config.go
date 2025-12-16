@@ -7,6 +7,7 @@ type Config struct {
 	CICD      CICDConfig      `mapstructure:"cicd"`
 	DingTalk  DingTalkConfig  `mapstructure:"dingtalk"`
 	Feishu    FeishuConfig    `mapstructure:"feishu"`
+	Wecom     WecomConfig     `mapstructure:"wecom"`
 	LLM       LLMConfig       `mapstructure:"llm"`
 	Auth      AuthConfig      `mapstructure:"auth"`
 	Cache     CacheConfig     `mapstructure:"cache"`
@@ -82,6 +83,13 @@ type FeishuConfig struct {
 	Enabled   bool   `mapstructure:"enabled"`
 	AppID     string `mapstructure:"app_id"`
 	AppSecret string `mapstructure:"app_secret"`
+}
+
+// WecomConfig 企业微信配置
+type WecomConfig struct {
+	Enabled        bool   `mapstructure:"enabled"`
+	Token          string `mapstructure:"token"`           // 企业微信AI机器人Token
+	EncodingAESKey string `mapstructure:"encoding_aes_key"` // 消息加密密钥
 }
 
 // AuthConfig 认证配置

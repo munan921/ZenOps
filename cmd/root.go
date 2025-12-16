@@ -164,6 +164,9 @@ var runCmd = &cobra.Command{
 				// 创建 HTTP 服务器 (使用 Gin)
 				httpServer := server.NewHTTPGinServer(cfg)
 
+				// 设置 MCP Server (用于企业微信等需要 MCP 的功能)
+				httpServer.SetMCPServer(mcpServer)
+
 				// 启动 HTTP 服务器(阻塞式)
 				if err := httpServer.Start(); err != nil {
 					errCh <- fmt.Errorf("http server error: %w", err)

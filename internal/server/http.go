@@ -12,15 +12,17 @@ import (
 	"github.com/eryajf/zenops/internal/model"
 	"github.com/eryajf/zenops/internal/provider"
 	aliyunprovider "github.com/eryajf/zenops/internal/provider/aliyun"
+	"github.com/eryajf/zenops/internal/wecom"
 	"github.com/gin-gonic/gin"
 )
 
 // HTTPGinServer 基于 Gin 的 HTTP 服务器
 type HTTPGinServer struct {
-	config    *config.Config
-	engine    *gin.Engine
-	server    *http.Server
-	mcpServer *imcp.MCPServer
+	config        *config.Config
+	engine        *gin.Engine
+	server        *http.Server
+	mcpServer     *imcp.MCPServer
+	wecomHandler  *wecom.MessageHandler
 }
 
 // NewHTTPGinServer 创建基于 Gin 的 HTTP 服务器
@@ -52,6 +54,17 @@ func NewHTTPGinServer(cfg *config.Config) *HTTPGinServer {
 // SetMCPServer 设置 MCP Server
 func (s *HTTPGinServer) SetMCPServer(mcpServer *imcp.MCPServer) {
 	s.mcpServer = mcpServer
+
+	// 如果启用了企业微信,初始化消息处理器
+	if s.config.Wecom.Enabled {
+		handler, err := wecom.NewMessageHandler(s.config, mcpServer)
+		if err != nil {
+			logx.Error("Failed to create Wecom message handler: %v", err)
+		} else {
+			s.wecomHandler = handler
+			logx.Info("Wecom message handler initialized")
+		}
+	}
 }
 
 // registerMiddlewares 注册中间件
@@ -104,6 +117,12 @@ func (s *HTTPGinServer) corsMiddleware() gin.HandlerFunc {
 
 // registerRoutes 注册路由
 func (s *HTTPGinServer) registerRoutes() {
+	// 企业微信机器人回调路由(不在 v1 组内)
+	if s.config.Wecom.Enabled {
+		s.engine.GET("/api/wecom/callback", s.handleWecomVerify)
+		s.engine.POST("/api/wecom/callback", s.handleWecomMessage)
+	}
+
 	// API v1 路由组
 	v1 := s.engine.Group("/api/v1")
 	{
@@ -1228,4 +1247,94 @@ func interfaceSlice(s []string) []any {
 // createAliyunClient 创建阿里云客户端
 func createAliyunClient(ak, sk, region string) (*aliyunprovider.Client, error) {
 	return aliyunprovider.NewClient(ak, sk, region)
+}
+
+// ==================== 企业微信机器人 API ====================
+
+// handleWecomVerify 处理企业微信URL验证
+func (s *HTTPGinServer) handleWecomVerify(c *gin.Context) {
+	if s.wecomHandler == nil {
+		s.error(c, http.StatusServiceUnavailable, "Wecom handler not initialized")
+		return
+	}
+
+	signature := c.Query("msg_signature")
+	timestamp := c.Query("timestamp")
+	nonce := c.Query("nonce")
+	echoStr := c.Query("echostr")
+
+	logx.Info("Wecom verify request: signature=%s, timestamp=%s, nonce=%s", signature, timestamp, nonce)
+
+	replyEchoStr, err := s.wecomHandler.Client.VerifyURL(signature, timestamp, nonce, echoStr)
+	if err != nil {
+		logx.Error("Failed to verify Wecom URL: %v", err)
+		s.error(c, http.StatusBadRequest, fmt.Sprintf("Verification failed: %v", err))
+		return
+	}
+
+	c.String(http.StatusOK, replyEchoStr)
+}
+
+// handleWecomMessage 处理企业微信消息回调
+func (s *HTTPGinServer) handleWecomMessage(c *gin.Context) {
+	if s.wecomHandler == nil {
+		s.error(c, http.StatusServiceUnavailable, "Wecom handler not initialized")
+		return
+	}
+
+	signature := c.Query("msg_signature")
+	timestamp := c.Query("timestamp")
+	nonce := c.Query("nonce")
+
+	// 读取请求体
+	body, err := c.GetRawData()
+	if err != nil {
+		logx.Error("Failed to read request body: %v", err)
+		s.error(c, http.StatusBadRequest, "Failed to read request body")
+		return
+	}
+
+	logx.Debug("Wecom message request: signature=%s, timestamp=%s, nonce=%s, body=%s",
+		signature, timestamp, nonce, string(body))
+
+	// 解密消息
+	req, err := s.wecomHandler.Client.DecryptUserReq(signature, timestamp, nonce, string(body))
+	if err != nil {
+		logx.Error("Failed to decrypt Wecom message: %v", err)
+		c.String(http.StatusOK, "") // 企业微信要求返回200
+		return
+	}
+
+	var response string
+	ctx := c.Request.Context()
+
+	// 根据消息类型处理
+	switch req.Msgtype {
+	case "text":
+		// 处理文本消息
+		response, err = s.wecomHandler.HandleTextMessage(ctx, req)
+		if err != nil {
+			logx.Error("Failed to handle text message: %v", err)
+			c.String(http.StatusOK, "")
+			return
+		}
+
+	case "stream":
+		// 处理流式轮询请求
+		response, err = s.wecomHandler.HandleStreamRequest(ctx, req)
+		if err != nil {
+			logx.Error("Failed to handle stream request: %v", err)
+			c.String(http.StatusOK, "")
+			return
+		}
+
+	default:
+		logx.Warn("Unsupported message type: %s", req.Msgtype)
+		c.String(http.StatusOK, "")
+		return
+	}
+
+	// 返回加密响应
+	c.Header("Content-Type", "application/json")
+	c.String(http.StatusOK, response)
 }
