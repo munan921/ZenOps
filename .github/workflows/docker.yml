@@ -39,7 +39,7 @@ jobs:
         with:
           repository: eryajf/zenops-web
           path: zenops-web
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GH_PAT }}
 
       - name: 设置 Node.js 环境
         uses: actions/setup-node@v4
